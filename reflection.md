@@ -4,8 +4,23 @@
 
 **a. Initial design**
 
-- Briefly describe your initial UML design.
-- What classes did you include, and what responsibilities did you assign to each?
+The system is built around three core actions a user needs to perform:
+
+1. **Set up a pet profile.** The user enters their own name and their pet's name, species, age, and any special needs (e.g., medication, joint support). This information is captured in two classes — `Owner` and `Pet` — and flows into the scheduler so that task reasoning can be personalized. For example, if a pet has a special need, the scheduler will call that out explicitly when it explains why a related task was chosen.
+
+2. **Build and manage a task list.** The user adds care tasks one at a time, specifying a title, duration in minutes, priority (high / medium / low), category (exercise, feeding, medication, grooming, enrichment, or general), and an optional preferred time of day. Each task is a `Task` object. The user can also remove individual tasks or clear the whole list before generating a plan.
+
+3. **Generate and read today's schedule.** The user sets how many minutes they have available and what time their day starts, then clicks "Generate schedule." The `Scheduler` class takes the `Owner`, `Pet`, and list of `Task` objects and returns a `DailyPlan` — an ordered list of `ScheduledTask` entries, each with a start time, end time, and plain-language explanation of why it was chosen. Tasks that don't fit in the time budget are listed separately as skipped, with a reason.
+
+The five classes in the system and their responsibilities:
+
+| Class | Responsibility |
+|---|---|
+| `Task` | Holds what needs to happen, how long it takes, its priority, category, and preferred time |
+| `Pet` | Holds the animal's name, species, age, and special needs |
+| `Owner` | Holds the person's name, total time available, and day start time |
+| `Scheduler` | Sorts tasks by priority and fits them into the owner's time budget; produces a `DailyPlan` |
+| `DailyPlan` | Stores the ordered list of scheduled tasks and any skipped tasks; can render a text summary |
 
 **b. Design changes**
 
