@@ -12,8 +12,9 @@ Scheduler       - produces a DailyPlan from an Owner, Pet, and task list
 """
 
 from __future__ import annotations
+import dataclasses
 from dataclasses import dataclass, field
-from datetime import time
+from datetime import date, time, timedelta
 from typing import Literal
 
 Priority = Literal["high", "medium", "low"]
@@ -27,6 +28,17 @@ TIME_RANK = {"morning": 0, "afternoon": 1, "evening": 2}  # used to sort within 
 
 Frequency = Literal["daily", "weekly", "as-needed"]
 
+# Time windows used for conflict detection (minutes since midnight)
+TIME_WINDOWS = {
+    "morning":   (0,        12 * 60),
+    "afternoon": (12 * 60,  17 * 60),
+    "evening":   (17 * 60,  24 * 60),
+}
+
+# Minimum gap (minutes) between two tasks of the same category
+CATEGORY_MIN_GAP = {"feeding": 120, "medication": 60}
+
+
 @dataclass
 class Task:
     title: str
@@ -37,6 +49,10 @@ class Task:
     frequency: Frequency = "daily"      # how often this task recurs
     preferred_time: str | None = None   # "morning", "afternoon", "evening", or None
     completed: bool = False             # whether this task is done for today
+    due_date: date | None = None        # when this task is next due (None = untracked)
+    days_of_week: list[int] = field(
+        default_factory=lambda: list(range(7))
+    )   # 0=Mon … 6=Sun; only used when frequency="weekly"
 
     def __post_init__(self):
         """Validate duration and priority on creation."""
@@ -44,6 +60,33 @@ class Task:
             raise ValueError(f"duration_minutes must be positive, got {self.duration_minutes}")
         if self.priority not in PRIORITY_RANK:
             raise ValueError(f"priority must be one of {list(PRIORITY_RANK)}")
+
+    def next_occurrence(self, today: date) -> Task | None:
+        """
+        Return a new Task for the next scheduled occurrence of this task.
+
+        - daily   → due_date advances by 1 day, completed reset to False
+        - weekly  → due_date advances by 7 days, completed reset to False
+        - as-needed → returns None (no automatic recurrence)
+
+        The original task is not modified; dataclasses.replace() is used to
+        produce a clean copy with only due_date and completed changed.
+        """
+        if self.frequency == "daily":
+            return dataclasses.replace(self, due_date=today + timedelta(days=1), completed=False)
+        if self.frequency == "weekly":
+            return dataclasses.replace(self, due_date=today + timedelta(weeks=1), completed=False)
+        # "as-needed" — no auto-recurrence
+        return None
+
+    def is_due_today(self, weekday: int) -> bool:
+        """Return True if this task should run on the given weekday (0=Mon, 6=Sun)."""
+        if self.frequency == "daily":
+            return True
+        if self.frequency == "weekly":
+            return weekday in self.days_of_week
+        # "as-needed" tasks are never auto-included; owner adds them explicitly
+        return False
 
 
 @dataclass
@@ -65,6 +108,10 @@ class Pet:
     def pending_tasks(self) -> list[Task]:
         """Return tasks not yet completed today."""
         return [t for t in self.tasks if not t.completed]
+
+    def due_today_tasks(self, weekday: int) -> list[Task]:
+        """Return pending tasks that are due on the given weekday."""
+        return [t for t in self.pending_tasks() if t.is_due_today(weekday)]
 
 
 @dataclass
@@ -115,6 +162,7 @@ class DailyPlan:
     pet: Pet
     scheduled: list[ScheduledTask]
     skipped: list[tuple[Task, str]]     # (task, reason_skipped)
+    conflicts: list[str] = field(default_factory=list)  # conflict warnings from detect_conflicts()
 
     @property
     def total_minutes(self) -> int:
@@ -143,7 +191,14 @@ class DailyPlan:
             lines.append("")
             lines.append("Skipped:")
             for task, reason in self.skipped:
-                lines.append(f"  ✗ {task.title}: {reason}")
+                prefix = "  ⚠ CRITICAL" if task.priority == "high" or task.category == "medication" else "  ✗"
+                lines.append(f"{prefix} {task.title}: {reason}")
+
+        if self.conflicts:
+            lines.append("")
+            lines.append("Conflicts detected:")
+            for warning in self.conflicts:
+                lines.append(f"  ⚠ {warning}")
 
         return "\n".join(lines)
 
@@ -203,6 +258,18 @@ class Scheduler:
             ),
         )
 
+    def sort_by_time(self, tasks: list[Task]) -> list[Task]:
+        """
+        Sort tasks by preferred_time alone, supporting both named periods and HH:MM strings.
+
+        Ordering:
+        - Named periods: "morning" (0) < "afternoon" (1) < "evening" (2)
+        - HH:MM strings: converted to minutes since midnight (e.g. "08:30" → 510)
+        - HH:MM values slot between named periods based on their actual hour
+        - Tasks with no preferred_time sort last
+        """
+        return sorted(tasks, key=lambda t: _time_sort_key(t.preferred_time))
+
     def tasks_by_priority(self, tasks: list[Task]) -> dict[str, list[Task]]:
         """Group tasks into a dict keyed by priority level."""
         groups: dict[str, list[Task]] = {"high": [], "medium": [], "low": []}
@@ -215,12 +282,127 @@ class Scheduler:
         return {pet.name: pet.pending_tasks() for pet in owner.pets}
 
     # ------------------------------------------------------------------
+    # Filtering
+    # ------------------------------------------------------------------
+
+    def filter_by_status(self, tasks: list[Task], completed: bool) -> list[Task]:
+        """Return tasks matching the given completion status."""
+        return [t for t in tasks if t.completed == completed]
+
+    def filter_by_category(self, tasks: list[Task], category: str) -> list[Task]:
+        """Return tasks belonging to the given category."""
+        return [t for t in tasks if t.category == category]
+
+    def filter_by_priority(self, tasks: list[Task], priority: str) -> list[Task]:
+        """Return tasks matching the given priority level."""
+        return [t for t in tasks if t.priority == priority]
+
+    def filter_by_pet(self, owner: Owner, pet_name: str) -> list[Task]:
+        """Return all tasks belonging to a named pet."""
+        for pet in owner.pets:
+            if pet.name == pet_name:
+                return pet.tasks
+        return []
+
+    # ------------------------------------------------------------------
+    # Recurring task handling
+    # ------------------------------------------------------------------
+
+    def due_today(self, owner: Owner, weekday: int) -> list[Task]:
+        """Return all pending tasks due today across every pet, based on frequency and weekday."""
+        return [
+            task
+            for pet in owner.pets
+            for task in pet.due_today_tasks(weekday)
+        ]
+
+    # ------------------------------------------------------------------
+    # Conflict detection
+    # ------------------------------------------------------------------
+
+    def detect_conflicts(self, scheduled: list[ScheduledTask]) -> list[str]:
+        """
+        Inspect a list of ScheduledTasks and return human-readable conflict warnings.
+
+        Checks:
+        - Time overlaps between any two tasks
+        - Same-category tasks placed too close together (e.g. two feedings < 2 h apart)
+        - Medication scheduled outside its preferred time window
+        """
+        warnings: list[str] = []
+
+        # 1. Time overlaps
+        for i, a in enumerate(scheduled):
+            for b in scheduled[i + 1:]:
+                a_start, a_end = _to_minutes(a.start_time), _to_minutes(a.end_time)
+                b_start, b_end = _to_minutes(b.start_time), _to_minutes(b.end_time)
+                if a_start < b_end and b_start < a_end:
+                    warnings.append(
+                        f"Overlap: '{a.task.title}' and '{b.task.title}' share time slots"
+                    )
+
+        # 2. Same-category tasks too close together
+        for category, min_gap in CATEGORY_MIN_GAP.items():
+            cat_tasks = [s for s in scheduled if s.task.category == category]
+            for i, a in enumerate(cat_tasks):
+                for b in cat_tasks[i + 1:]:
+                    gap = abs(_to_minutes(b.start_time) - _to_minutes(a.start_time))
+                    if gap < min_gap:
+                        warnings.append(
+                            f"Too close: '{a.task.title}' and '{b.task.title}' are {gap} min apart "
+                            f"(recommended minimum for {category}: {min_gap} min)"
+                        )
+
+        # 3. Medication outside preferred time window
+        for s in scheduled:
+            if s.task.category == "medication" and s.task.preferred_time:
+                window = TIME_WINDOWS.get(s.task.preferred_time)
+                if window:
+                    start_mins = _to_minutes(s.start_time)
+                    if not (window[0] <= start_mins < window[1]):
+                        warnings.append(
+                            f"Window conflict: medication '{s.task.title}' is scheduled outside "
+                            f"its preferred {s.task.preferred_time} window"
+                        )
+
+        return warnings
+
+    # ------------------------------------------------------------------
     # Task state management
     # ------------------------------------------------------------------
 
-    def mark_complete(self, task: Task) -> None:
-        """Mark a task as done for today."""
+    def mark_complete(
+        self,
+        task: Task,
+        pet: Pet | None = None,
+        today: date | None = None,
+    ) -> Task | None:
+        """
+        Mark a task as done for today and, when applicable, schedule its next occurrence.
+
+        Parameters
+        ----------
+        task  : The Task to mark complete.
+        pet   : Optional. The Pet that owns the task. When provided together with
+                ``today``, a new Task is automatically created for the next
+                occurrence and appended to ``pet.tasks`` via ``pet.add_task()``.
+        today : Optional. The current date used to calculate the next due date.
+                Must be supplied alongside ``pet`` to trigger auto-recurrence.
+
+        Returns
+        -------
+        Task | None
+            The newly created next-occurrence Task if one was generated, or
+            None if no recurrence was created (e.g. frequency is "as-needed",
+            or ``pet`` / ``today`` were not provided).
+        """
         task.completed = True
+        if pet is not None and today is not None:
+            next_task = task.next_occurrence(today)
+            if next_task is not None:
+                pet.add_task(next_task)
+                return next_task
+        return None
 
     def reset_all(self, owner: Owner) -> None:
         """Reset completion status on all tasks (call at the start of a new day)."""
@@ -266,7 +448,8 @@ class Scheduler:
             cursor += task.duration_minutes
             budget -= task.duration_minutes
 
-        return DailyPlan(owner=owner, pet=pet, scheduled=scheduled, skipped=skipped)
+        conflicts = self.detect_conflicts(scheduled)
+        return DailyPlan(owner=owner, pet=pet, scheduled=scheduled, skipped=skipped, conflicts=conflicts)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -305,6 +488,23 @@ class Scheduler:
 # ---------------------------------------------------------------------------
 # Private utilities
 # ---------------------------------------------------------------------------
+
+def _time_sort_key(preferred_time: str | None) -> int:
+    """
+    Convert a preferred_time value to a sortable integer (minutes since midnight).
+
+    Handles two formats:
+      - Named period : "morning" → 0, "afternoon" → 720, "evening" → 1020, None → 9999
+      - HH:MM string : "08:30" → 510  (via lambda: int(h)*60 + int(m))
+    """
+    if preferred_time is None:
+        return 9999                             # no preference → sort last
+    if ":" in preferred_time:
+        # HH:MM format — use a lambda to split and convert
+        return (lambda h, m: int(h) * 60 + int(m))(*preferred_time.split(":"))
+    # Named period — map to the start minute of each window
+    return {"morning": 0, "afternoon": 720, "evening": 1020}.get(preferred_time, 9999)
+
 
 def _to_minutes(t: time) -> int:
     """Convert a time object to total minutes since midnight."""

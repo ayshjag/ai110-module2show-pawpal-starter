@@ -32,6 +32,31 @@ source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+## Smarter Scheduling
+
+Beyond basic priority ordering, the scheduler includes several logic improvements:
+
+**Sorting**
+- `sort_tasks()` orders tasks by priority → preferred time → duration.
+- `sort_by_time()` sorts by the `preferred_time` field, supporting both named periods (`"morning"`, `"afternoon"`, `"evening"`) and exact `"HH:MM"` strings — both converted to minutes since midnight for consistent ordering.
+
+**Filtering**
+- `filter_by_status(tasks, completed)` — separate done vs. pending tasks.
+- `filter_by_category(tasks, category)` — isolate tasks by type (feeding, medication, etc.).
+- `filter_by_priority(tasks, priority)` — pull only high/medium/low tasks.
+- `filter_by_pet(owner, pet_name)` — get all tasks belonging to a named pet.
+
+**Recurring tasks**
+- Every `Task` has a `frequency` field: `"daily"`, `"weekly"`, or `"as-needed"`.
+- `Task.is_due_today(weekday)` determines whether a task should appear in today's plan.
+- `Task.next_occurrence(today)` uses `timedelta` to clone the task with an updated `due_date` — one day ahead for daily tasks, one week for weekly.
+- `Scheduler.mark_complete(task, pet, today)` marks the task done and automatically appends the next occurrence to the pet's task list.
+
+**Conflict detection**
+- `detect_conflicts(scheduled)` inspects a built plan and returns human-readable warnings (never crashes).
+- Detects three problem types: time overlaps between any two tasks, same-category tasks placed too close together (e.g. two feedings < 2 hours apart), and medication scheduled outside its preferred time window.
+- Warnings are attached to `DailyPlan.conflicts` and displayed in `summary()`.
+
 ### Suggested workflow
 
 1. Read the scenario carefully and identify requirements and edge cases.

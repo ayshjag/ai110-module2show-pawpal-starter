@@ -41,8 +41,15 @@ The `Task` class stores a `preferred_time` attribute ("morning", "afternoon", "e
 
 **b. Tradeoffs**
 
-- Describe one tradeoff your scheduler makes.
-- Why is that tradeoff reasonable for this scenario?
+The scheduler's conflict detection uses a greedy, warning-only approach rather than preventing conflicts at schedule-build time. Specifically, `detect_conflicts()` checks for overlapping durations between any two tasks using interval math (`a_start < b_end and b_start < a_end`), but it only runs *after* the schedule is already built and returns a list of warning strings rather than rejecting or reordering conflicting tasks.
+
+This means a conflict can exist in the final plan — the scheduler will flag it but still hand it back to the user unchanged. A stricter design could refuse to schedule a task that conflicts, or automatically reorder tasks to avoid the overlap. The tradeoff was made deliberately for two reasons:
+
+1. **In normal use, conflicts shouldn't happen.** `build_plan()` places tasks sequentially with no gaps, so two tasks for the same pet can never overlap when scheduled through the standard path. Conflicts only arise if tasks are manually constructed or injected — which is an edge case, not the main flow.
+
+2. **Warnings are more useful than crashes for a pet owner.** If the scheduler silently dropped or reordered tasks without explanation, a user might miss that their pet's medication was moved or skipped. Surfacing the conflict as a readable warning — "medication 'Joint supplement' is scheduled outside its preferred morning window" — gives the owner information to act on rather than hiding the problem.
+
+The limitation this creates is that the scheduler does not automatically resolve conflicts it detects. A future improvement would be to attempt rescheduling before falling back to a warning.
 
 ---
 
