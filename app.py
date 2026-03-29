@@ -96,14 +96,22 @@ with st.form("add_task_form", clear_on_submit=True):
             ))
             st.rerun()
 
+PRIORITY_EMOJI = {"high": "🔴", "medium": "🟡", "low": "🟢"}
+CATEGORY_EMOJI = {
+    "exercise": "🏃", "feeding": "🍽️", "medication": "💊",
+    "grooming": "✂️", "enrichment": "🎾", "general": "📋",
+}
+
 if pet.tasks:
     st.write(f"**{len(pet.tasks)} task(s) on {pet.name}:**")
     for i, t in enumerate(pet.tasks):
         col_a, col_b, col_c = st.columns([5, 1, 1])
         with col_a:
             status = "~~" if t.completed else ""
+            p_emoji = PRIORITY_EMOJI.get(t.priority, "")
+            c_emoji = CATEGORY_EMOJI.get(t.category, "")
             st.markdown(
-                f"{status}**{t.title}** — {t.duration_minutes} min | "
+                f"{status}{p_emoji} **{t.title}** {c_emoji} — {t.duration_minutes} min | "
                 f"`{t.priority}` | `{t.category}` | `{t.frequency}`{status}"
             )
             if t.description:
@@ -173,8 +181,8 @@ if st.button("Generate schedule", type="primary"):
             table_data = [
                 {
                     "Time": f"{s.start_time.strftime('%I:%M %p')} – {s.end_time.strftime('%I:%M %p')}",
-                    "Task": s.task.title,
-                    "Priority": s.task.priority.upper(),
+                    "Task": f"{CATEGORY_EMOJI.get(s.task.category, '')} {s.task.title}",
+                    "Priority": f"{PRIORITY_EMOJI.get(s.task.priority, '')} {s.task.priority.upper()}",
                     "Duration": f"{s.task.duration_minutes} min",
                     "Category": s.task.category,
                 }

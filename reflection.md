@@ -127,3 +127,43 @@ The second improvement would be making `preferred_time` a hard constraint for me
 The most important thing learned was that **AI is a strong implementer but a weak architect**. When given a clear, scoped specification — "implement `next_occurrence()` using `dataclasses.replace()` and `timedelta` with these exact behaviours" — it produces correct, usable code quickly. When asked broad questions like "how should the scheduler work?" it produces plausible-sounding but often shallow designs that skip the hard tradeoffs.
 
 The human role in this project was to make the architectural decisions: which constraints matter most, which tradeoffs to accept, which AI suggestions to reject, and how to structure the system so it can grow. The AI handled a large volume of correct, well-structured code — but every meaningful design choice required a human to evaluate it, verify it against tests, and decide whether it fit the system's direction. Being the "lead architect" meant staying in control of the why, even when delegating the how.
+
+---
+
+## 6. Prompt Comparison
+
+**Task given to both models:** "Implement a method `weighted_score(task, pet)` on the Scheduler class that returns a numeric score representing how urgently a task should be scheduled. Higher scores mean higher urgency. Consider task priority, category, pet age, and any special needs."
+
+---
+
+**Claude Sonnet (claude-sonnet-4-6)**
+
+Claude produced a method that mapped priority to base scores (high=100, medium=50, low=10), then added category bonuses (medication +40, feeding +20, exercise +10), an age bonus for senior pets (age ≥ 8 → +15), a special-needs bonus when the pet's needs matched the task title or category (+20), and a small preferred-time bonus (morning +5, afternoon +3, evening +1). The method was short (~12 lines), used `.get()` with defaults throughout, and made each scoring dimension independent and easy to tune. It also generated `build_plan_weighted()` alongside it — a complete greedy scheduler that sorted by `weighted_score()` descending before fitting tasks into the time budget, with the same `ScheduledTask`/`DailyPlan` output contract as `build_plan()`.
+
+**What was Pythonic:** The use of dictionary literals as inline lookup tables instead of if-elif chains made the scoring logic dense but readable. The method had no side effects, took typed inputs, and returned a plain float — easy to test in isolation.
+
+**What required judgment:** Claude did not explain why the weight values were chosen (100/50/10, 40/20/10). Those numbers are arbitrary starting points, not calibrated scores. A real system would need them tuned against actual scheduling data. Claude also did not flag that `weighted_score()` and `build_plan()` could produce different schedules for the same input — the existence of two scheduling paths requires the UI to choose one explicitly, which Claude left unresolved.
+
+---
+
+**GPT-4o (via ChatGPT)**
+
+GPT-4o produced a similar method structure but used explicit `if/elif` chains instead of dict lookups, and added a `due_date` urgency boost — tasks overdue by more than one day received a +30 bonus. It also suggested storing the weights as class-level constants (`PRIORITY_WEIGHTS`, `CATEGORY_WEIGHTS`) so they could be tuned without touching the method body. The method was longer (~20 lines) but self-documenting because each weight had a named constant.
+
+**What was more modular:** The class-level constant suggestion is a genuine improvement — it separates configuration from logic and makes the scoring policy explicit and adjustable without reading the implementation. The `due_date` urgency dimension is also a useful addition that Claude omitted.
+
+**What required judgment:** GPT-4o did not implement `build_plan_weighted()` — it stopped at the scoring method and suggested "you can now use this in your scheduler." This left the integration work to the developer. The `if/elif` style is also more verbose and harder to extend if new priority levels or categories are added later.
+
+---
+
+**Comparison and verdict**
+
+| Dimension | Claude Sonnet | GPT-4o |
+|---|---|---|
+| Code length | Short (~12 lines) | Longer (~20 lines) |
+| Readability | Dict literals — dense but clean | Named constants — verbose but self-documenting |
+| Completeness | Scored + built plan method | Scored only |
+| New dimensions | Age, special needs, preferred time | Due-date urgency |
+| Modularity | Weights embedded in method | Weights as class constants |
+
+Neither output was production-ready without human review. Claude was more immediately usable (complete integration included), while GPT-4o introduced better software design habits (named constants, due-date urgency). The most defensible implementation would combine both: use GPT-4o's class-constant structure for the weights, add Claude's `build_plan_weighted()` integration, and include GPT-4o's due-date urgency dimension. The human role was to make that synthesis — neither model proposed combining the other's strengths.

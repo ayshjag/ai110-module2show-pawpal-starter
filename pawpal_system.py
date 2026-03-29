@@ -13,6 +13,7 @@ Scheduler       - produces a DailyPlan from an Owner, Pet, and task list
 
 from __future__ import annotations
 import dataclasses
+import json
 from dataclasses import dataclass, field
 from datetime import date, time, timedelta
 from typing import Literal
@@ -88,6 +89,50 @@ class Task:
         # "as-needed" tasks are never auto-included; owner adds them explicitly
         return False
 
+    def to_dict(self) -> dict:
+        """
+        Convert this Task to a plain dictionary suitable for json.dumps().
+
+        - due_date is serialized as an ISO string ("YYYY-MM-DD") or null.
+        - days_of_week is serialized as-is (list[int]).
+        All other fields are stored at their native Python types.
+        """
+        return {
+            "title": self.title,
+            "duration_minutes": self.duration_minutes,
+            "description": self.description,
+            "priority": self.priority,
+            "category": self.category,
+            "frequency": self.frequency,
+            "preferred_time": self.preferred_time,
+            "completed": self.completed,
+            "due_date": self.due_date.isoformat() if self.due_date is not None else None,
+            "days_of_week": self.days_of_week,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> Task:
+        """
+        Reconstruct a Task from a dictionary produced by to_dict().
+
+        - due_date is parsed from an ISO string ("YYYY-MM-DD") when present.
+        - days_of_week is used directly as list[int].
+        """
+        due_date_raw = data.get("due_date")
+        due_date = date.fromisoformat(due_date_raw) if due_date_raw is not None else None
+        return cls(
+            title=data["title"],
+            duration_minutes=data["duration_minutes"],
+            description=data.get("description", ""),
+            priority=data.get("priority", "medium"),
+            category=data.get("category", "general"),
+            frequency=data.get("frequency", "daily"),
+            preferred_time=data.get("preferred_time"),
+            completed=data.get("completed", False),
+            due_date=due_date,
+            days_of_week=data.get("days_of_week", list(range(7))),
+        )
+
 
 @dataclass
 class Pet:
@@ -112,6 +157,35 @@ class Pet:
     def due_today_tasks(self, weekday: int) -> list[Task]:
         """Return pending tasks that are due on the given weekday."""
         return [t for t in self.pending_tasks() if t.is_due_today(weekday)]
+
+    def to_dict(self) -> dict:
+        """
+        Convert this Pet to a plain dictionary suitable for json.dumps().
+
+        Nested Task objects are serialized via their own to_dict() methods.
+        """
+        return {
+            "name": self.name,
+            "species": self.species,
+            "age_years": self.age_years,
+            "special_needs": self.special_needs,
+            "tasks": [task.to_dict() for task in self.tasks],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> Pet:
+        """
+        Reconstruct a Pet from a dictionary produced by to_dict().
+
+        Nested task dictionaries are parsed via Task.from_dict().
+        """
+        return cls(
+            name=data["name"],
+            species=data.get("species", "dog"),
+            age_years=data.get("age_years", 1.0),
+            special_needs=data.get("special_needs", []),
+            tasks=[Task.from_dict(t) for t in data.get("tasks", [])],
+        )
 
 
 @dataclass
@@ -141,6 +215,71 @@ class Owner:
     def all_pending_tasks(self) -> list[Task]:
         """Return incomplete tasks across all pets."""
         return [task for pet in self.pets for task in pet.pending_tasks()]
+
+    def to_dict(self) -> dict:
+        """
+        Convert this Owner to a plain dictionary suitable for json.dumps().
+
+        - day_start (time) is serialized as "HH:MM".
+        - Nested Pet objects are serialized via their own to_dict() methods.
+        """
+        return {
+            "name": self.name,
+            "available_minutes": self.available_minutes,
+            "day_start": f"{self.day_start.hour:02d}:{self.day_start.minute:02d}",
+            "pets": [pet.to_dict() for pet in self.pets],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> Owner:
+        """
+        Reconstruct an Owner from a dictionary produced by to_dict().
+
+        - day_start is parsed from an "HH:MM" string back to a time object.
+        - Nested pet dictionaries are parsed via Pet.from_dict().
+        """
+        day_start_raw = data.get("day_start", "07:00")
+        h, m = day_start_raw.split(":")
+        day_start = time(int(h), int(m))
+        return cls(
+            name=data["name"],
+            available_minutes=data.get("available_minutes", 120),
+            day_start=day_start,
+            pets=[Pet.from_dict(p) for p in data.get("pets", [])],
+        )
+
+    def save_to_json(self, path: str) -> None:
+        """
+        Serialize this Owner (including all nested pets and tasks) to a JSON file.
+
+        Parameters
+        ----------
+        path : str
+            Filesystem path of the output file. The file is created or
+            overwritten. Encoding is UTF-8.
+        """
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(self.to_dict(), fh, indent=2)
+
+    @classmethod
+    def load_from_json(cls, path: str) -> Owner:
+        """
+        Read a JSON file written by save_to_json() and return a fully
+        reconstructed Owner object with all nested pets and tasks restored.
+
+        Parameters
+        ----------
+        path : str
+            Filesystem path of the JSON file to read. Encoding is UTF-8.
+
+        Returns
+        -------
+        Owner
+            A new Owner instance with all pets and their tasks reconstructed.
+        """
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return cls.from_dict(data)
 
 
 @dataclass
@@ -246,6 +385,69 @@ class Scheduler:
     # ------------------------------------------------------------------
     # Organisation
     # ------------------------------------------------------------------
+
+    def weighted_score(self, task: Task, pet: Pet) -> float:
+        """
+        Compute a weighted urgency score for a task (higher = more urgent).
+
+        Factors
+        -------
+        - Priority          : high=100, medium=50, low=10
+        - Category urgency  : medication=+40, feeding=+20, exercise=+10
+        - Senior pet bonus  : pets aged ≥8 years get +15 on all tasks
+        - Special needs     : +20 if task matches a declared special need
+        - Preferred time    : morning=+5, afternoon=+3, evening=+1, none=0
+        """
+        score = {"high": 100, "medium": 50, "low": 10}[task.priority]
+        score += {"medication": 40, "feeding": 20, "exercise": 10}.get(task.category, 0)
+        if pet.age_years >= 8:
+            score += 15
+        if any(need.lower() in task.title.lower() or need.lower() in task.category.lower()
+               for need in pet.special_needs):
+            score += 20
+        score += {"morning": 5, "afternoon": 3, "evening": 1}.get(task.preferred_time or "", 0)
+        return score
+
+    def build_plan_weighted(self, owner: Owner, pet: Pet,
+                            tasks: list[Task] | None = None) -> DailyPlan:
+        """
+        Build a DailyPlan using weighted urgency scores instead of strict priority tiers.
+
+        Unlike build_plan(), which enforces hard priority tiers, this ranks tasks by
+        weighted_score() so a medium-priority medication for a senior pet with special
+        needs can outrank a high-priority enrichment task for a young healthy pet.
+        """
+        task_list = tasks if tasks is not None else pet.pending_tasks()
+        if not task_list:
+            return DailyPlan(owner=owner, pet=pet, scheduled=[], skipped=[])
+
+        sorted_tasks = sorted(task_list,
+                              key=lambda t: self.weighted_score(t, pet),
+                              reverse=True)
+        budget = owner.available_minutes
+        cursor = _to_minutes(owner.day_start)
+        scheduled: list[ScheduledTask] = []
+        skipped: list[tuple[Task, str]] = []
+
+        for task in sorted_tasks:
+            if task.duration_minutes > budget:
+                skipped.append((task,
+                    f"not enough time remaining ({budget} min left, "
+                    f"needs {task.duration_minutes} min)"))
+                continue
+            start = _from_minutes(cursor)
+            end = _from_minutes(cursor + task.duration_minutes)
+            score = self.weighted_score(task, pet)
+            reason = (self._reason(task, pet, len(scheduled))
+                      + f"; urgency score: {score:.0f}")
+            scheduled.append(ScheduledTask(task=task, start_time=start,
+                                           end_time=end, reason=reason))
+            cursor += task.duration_minutes
+            budget -= task.duration_minutes
+
+        conflicts = self.detect_conflicts(scheduled)
+        return DailyPlan(owner=owner, pet=pet, scheduled=scheduled,
+                         skipped=skipped, conflicts=conflicts)
 
     def sort_tasks(self, tasks: list[Task]) -> list[Task]:
         """Sort tasks by priority → preferred time → duration."""
