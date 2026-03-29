@@ -48,7 +48,7 @@ pip install -r requirements.txt
 
 ## 📸 Demo
 
-<a href="/course_images/ai110/pawpal_screenshot.png" target="_blank"><img src='/course_images/ai110/pawpal_screenshot.png' title='PawPal App' width='' alt='PawPal App' class='center-block' /></a>
+<a href="/course_images/ai110/pawpal_screenshot.png" target="_blank"><img src='https://github.com/ayshjag/ai110-module2show-pawpal-starter/blob/main/pawpal.gif' title='PawPal App' width='' alt='PawPal App' class='center-block' /></a>
 
 ## Smarter Scheduling
 
