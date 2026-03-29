@@ -145,30 +145,59 @@ if st.button("Generate schedule", type="primary"):
     if not pending:
         st.warning("No pending tasks to schedule — add tasks or reset completed ones.")
     else:
-        # build_plan() pulls pending tasks from pet automatically
         plan = scheduler.build_plan(owner, pet)
 
+        # Summary banner
+        pct = int(plan.total_minutes / owner.available_minutes * 100)
         st.success(
             f"Schedule for **{owner.name}** & **{pet.name}** — "
-            f"{plan.total_minutes} of {owner.available_minutes} min used."
+            f"{plan.total_minutes} of {owner.available_minutes} min used ({pct}%)."
         )
+        st.progress(min(pct, 100))
 
+        # Conflict warnings — shown prominently before the schedule
+        if plan.conflicts:
+            st.markdown("### ⚠ Conflict Warnings")
+            for warning in plan.conflicts:
+                is_critical = "medication" in warning.lower() or "overlap" in warning.lower()
+                if is_critical:
+                    st.error(f"**Critical:** {warning}")
+                else:
+                    st.warning(warning)
+
+        # Sorted schedule table
         if plan.scheduled:
-            st.markdown("### Scheduled")
+            st.markdown("### Scheduled Tasks")
+
+            # Build a display table using sort_by_time order for the view
+            table_data = [
+                {
+                    "Time": f"{s.start_time.strftime('%I:%M %p')} – {s.end_time.strftime('%I:%M %p')}",
+                    "Task": s.task.title,
+                    "Priority": s.task.priority.upper(),
+                    "Duration": f"{s.task.duration_minutes} min",
+                    "Category": s.task.category,
+                }
+                for s in plan.scheduled
+            ]
+            st.table(table_data)
+
+            st.markdown("#### Reasoning")
             for s in plan.scheduled:
-                with st.expander(
-                    f"{s.start_time.strftime('%I:%M %p')} – {s.end_time.strftime('%I:%M %p')}  |  "
-                    f"[{s.task.priority.upper()}]  {s.task.title}  ({s.task.duration_minutes} min)",
-                    expanded=True,
-                ):
+                with st.expander(f"{s.task.title}", expanded=False):
                     if s.task.description:
                         st.markdown(f"_{s.task.description}_")
-                    st.markdown(f"**Why:** {s.reason}")
+                    st.markdown(f"**Why scheduled:** {s.reason}")
                     if st.button("Mark done", key=f"plan_done_{s.task.title}"):
                         scheduler.mark_complete(s.task)
                         st.rerun()
 
+        # Skipped tasks — critical ones shown as errors
         if plan.skipped:
-            st.markdown("### Skipped")
+            st.markdown("### Skipped Tasks")
             for task, reason in plan.skipped:
-                st.warning(f"**{task.title}** — {reason}")
+                is_critical = task.priority == "high" or task.category == "medication"
+                if is_critical:
+                    st.error(f"**{task.title}** (critical) — {reason}")
+                else:
+                    st.warning(f"**{task.title}** — {reason}")

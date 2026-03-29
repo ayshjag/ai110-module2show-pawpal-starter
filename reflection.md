@@ -36,8 +36,15 @@ The `Task` class stores a `preferred_time` attribute ("morning", "afternoon", "e
 
 **a. Constraints and priorities**
 
-- What constraints does your scheduler consider (for example: time, priority, preferences)?
-- How did you decide which constraints mattered most?
+The scheduler considers four constraints, listed from most to least influential in the algorithm:
+
+1. **Time budget** — the owner's `available_minutes` is a hard ceiling. Any task that would push the total over the limit is skipped rather than partially scheduled. This was treated as the highest-priority constraint because exceeding it would give the owner an impossible plan.
+
+2. **Task priority** — tasks are sorted high → medium → low before placement. Within the same priority, ties are broken by preferred time (morning before afternoon before evening), then by shortest duration first. Priority was ranked second because the scenario explicitly required the scheduler to "consider priority" — a vet medication is always more important than enrichment play regardless of preference.
+
+3. **Preferred time of day** — `preferred_time` acts as a soft sorting hint within the same priority tier, not a hard constraint. A high-priority task will always be placed before a lower-priority one even if the lower-priority task has a more suitable time preference. This decision was made to keep the algorithm simple and predictable — a hard time window would require backtracking logic.
+
+4. **Recurrence frequency** — `daily` tasks are always included; `weekly` tasks only appear on their configured days; `as-needed` tasks are never auto-included. This constraint operates at the task-selection stage before scheduling begins, acting as a filter rather than a sort key.
 
 **b. Tradeoffs**
 
@@ -57,13 +64,20 @@ The limitation this creates is that the scheduler does not automatically resolve
 
 **a. How you used AI**
 
-- How did you use AI tools during this project (for example: design brainstorming, debugging, refactoring)?
-- What kinds of prompts or questions were most helpful?
+AI was used at every phase of the project, but in different roles:
+
+- **Phase 1 (design):** Used to generate and review a Mermaid.js UML diagram. The most useful prompt was asking it to identify missing relationships — this caught the `Owner → Pet` association that was absent from the first draft.
+- **Phase 2 (implementation):** Used to generate class skeletons and method stubs, then to review the implementation for gaps. The prompt "review #file:pawpal_system.py and identify missing relationships or logic bottlenecks" surfaced the fact that `preferred_time` was declared but never used by the scheduler.
+- **Phase 3 (algorithms):** Used to suggest improvements to `detect_conflicts()` and to implement the recurring task feature via Agent mode. The most effective prompts were specific and scoped — "implement `next_occurrence()` using `dataclasses.replace()` and `timedelta`" produced usable code immediately, whereas broad prompts like "improve the scheduler" produced vague suggestions.
+- **Phase 4 (testing):** Used to identify edge cases not covered by the existing suite. Asking "what are the most important edge cases for a pet scheduler with sorting and recurring tasks?" surfaced 10 additional test scenarios including boundary conditions (task duration exactly equals budget) and false-positive risks (single-task conflict detection).
+
+The most effective prompt pattern throughout was: **give the AI a specific class or method as context, state the exact behavior you want, and ask for a focused implementation** — not a broad improvement.
 
 **b. Judgment and verification**
 
-- Describe one moment where you did not accept an AI suggestion as-is.
-- How did you evaluate or verify what the AI suggested?
+When asked to simplify `detect_conflicts()`, the AI suggested replacing the three clearly-structured loops with nested list comprehensions using the walrus operator (`:=`). The compressed version was shorter but significantly harder to read — a future contributor would struggle to add a fourth conflict type without breaking the comprehension structure.
+
+The suggestion was rejected on readability grounds. The decision was verified by running the existing tests against both versions to confirm identical output, then choosing the version that would be easier to extend. This was an important moment: the AI optimized for conciseness, but the human judgment was that maintainability mattered more than line count for a system that would likely grow. The rule applied was: "three similar lines of code is better than a premature abstraction."
 
 ---
 
@@ -71,13 +85,26 @@ The limitation this creates is that the scheduler does not automatically resolve
 
 **a. What you tested**
 
-- What behaviors did you test?
-- Why were these tests important?
+The final test suite contains 58 tests across eight areas:
+
+- **Task validation** — zero duration and invalid priority raise `ValueError`; defaults are sensible
+- **Pet and Owner management** — add/remove tasks and pets; cross-pet task access via `all_tasks()` and `all_pending_tasks()`
+- **Scheduling** — priority ordering; time budget enforcement; sequential time slot assignment from `day_start`
+- **Sorting** — named periods (`morning < afternoon < evening`); `HH:MM` strings sorted chronologically; mixed formats interleave correctly; tasks with no preference sort last
+- **Filtering** — `filter_by_status`, `filter_by_category`, `filter_by_priority`, `filter_by_pet`; each returns empty list when no match
+- **Recurring tasks** — `is_due_today()` respects frequency and `days_of_week`; `next_occurrence()` advances `due_date` by correct interval; original task is never mutated; `mark_complete()` with and without `today` behaves differently
+- **Conflict detection** — overlaps caught; same-category proximity flagged; medication outside window warned; empty schedule and single-task produce no false positives
+- **Edge cases** — pet with no tasks; all tasks completed; task duration exactly equals budget; owner with no pets; weekly task excluded on wrong weekday; `next_occurrence()` preserves all attributes
+
+These tests mattered because they verified behavior at the boundaries — the places where assumptions break and bugs hide. Testing that a task with duration exactly equal to the budget is scheduled (not skipped) found a potential off-by-one risk in the budget check that would otherwise only surface in real use.
 
 **b. Confidence**
 
-- How confident are you that your scheduler works correctly?
-- What edge cases would you test next if you had more time?
+**★★★★☆ — High confidence in the logic layer, limited confidence in the UI layer.**
+
+The scheduling logic, sorting, filtering, recurring tasks, and conflict detection are all covered by automated tests that run in under 200ms. Any regression in `pawpal_system.py` would be caught immediately.
+
+The gap is `app.py`: the Streamlit UI has no automated tests. Session state persistence, button interactions, and the visual display of conflict warnings are only verifiable manually. The next tests to add would be integration tests using `streamlit.testing.v1` (Streamlit's built-in testing library) to simulate form submissions and verify that clicking "Generate schedule" produces the expected plan display.
 
 ---
 
@@ -85,12 +112,18 @@ The limitation this creates is that the scheduler does not automatically resolve
 
 **a. What went well**
 
-- What part of this project are you most satisfied with?
+The most satisfying part of the project is the relationship between the test suite and the implementation. Every significant feature — sorting, filtering, recurring tasks, conflict detection — has direct test coverage, and running `python -m pytest` gives immediate, trustworthy feedback on whether the system is working. This made refactoring and extending the code feel safe rather than risky. Adding `next_occurrence()` and wiring it into `mark_complete()` was straightforward because existing tests immediately caught any regressions.
+
+The `Scheduler` class also came together well as a genuine "brain" — it evolved from a single `build_plan()` method into a class with four distinct responsibility groups (retrieval, organisation, state management, plan generation), each with its own clearly named methods. This made the AI-assisted phases easier because scoped prompts like "add filtering methods to Scheduler" had a clear home to target.
 
 **b. What you would improve**
 
-- If you had another iteration, what would you improve or redesign?
+The shared time budget problem is the most significant design gap remaining. Currently `build_plan()` is called once per pet, giving each pet the full `available_minutes` budget independently. A real pet owner with two pets and 90 minutes total would expect those 90 minutes to be shared, not duplicated. Fixing this would require a multi-pet planning method that deducts time across pets rather than resetting the budget for each one.
+
+The second improvement would be making `preferred_time` a hard constraint for medication tasks specifically. Currently it is a sort hint only. A medication that must be given in the morning should be flagged as a critical miss if the owner's day starts too late for it to fit in the morning window — not silently placed at whatever time fits.
 
 **c. Key takeaway**
 
-- What is one important thing you learned about designing systems or working with AI on this project?
+The most important thing learned was that **AI is a strong implementer but a weak architect**. When given a clear, scoped specification — "implement `next_occurrence()` using `dataclasses.replace()` and `timedelta` with these exact behaviours" — it produces correct, usable code quickly. When asked broad questions like "how should the scheduler work?" it produces plausible-sounding but often shallow designs that skip the hard tradeoffs.
+
+The human role in this project was to make the architectural decisions: which constraints matter most, which tradeoffs to accept, which AI suggestions to reject, and how to structure the system so it can grow. The AI handled a large volume of correct, well-structured code — but every meaningful design choice required a human to evaluate it, verify it against tests, and decide whether it fit the system's direction. Being the "lead architect" meant staying in control of the why, even when delegating the how.

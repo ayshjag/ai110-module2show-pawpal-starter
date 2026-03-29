@@ -32,6 +32,24 @@ source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+## Features
+
+| Feature | Description |
+|---|---|
+| **Owner & pet profiles** | Enter owner name, available time, day start, pet species/age/special needs |
+| **Task management** | Add tasks with title, duration, priority, category, preferred time, frequency, and description; mark done or remove individually |
+| **Priority-first scheduling** | High-priority tasks are always scheduled first; ties broken by preferred time, then shortest duration |
+| **Time-of-day sorting** | Tasks sort by `preferred_time` — supports named periods (`morning`, `afternoon`, `evening`) and exact `HH:MM` strings |
+| **Conflict detection** | Flags overlapping tasks, same-category tasks placed too close (e.g. two feedings < 2 h apart), and medication outside its preferred time window |
+| **Recurring tasks** | Tasks marked `daily` or `weekly` automatically generate a next-occurrence instance when marked complete, with `due_date` calculated via `timedelta` |
+| **Filtering** | Filter any task list by completion status, category, priority, or pet name |
+| **Mark complete / Reset day** | Mark individual tasks done; reset all tasks at the start of a new day |
+| **Reasoning display** | Every scheduled task shows a plain-language explanation of why it was chosen and when |
+
+## 📸 Demo
+
+<a href="/course_images/ai110/pawpal_screenshot.png" target="_blank"><img src='/course_images/ai110/pawpal_screenshot.png' title='PawPal App' width='' alt='PawPal App' class='center-block' /></a>
+
 ## Smarter Scheduling
 
 Beyond basic priority ordering, the scheduler includes several logic improvements:
