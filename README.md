@@ -57,6 +57,31 @@ Beyond basic priority ordering, the scheduler includes several logic improvement
 - Detects three problem types: time overlaps between any two tasks, same-category tasks placed too close together (e.g. two feedings < 2 hours apart), and medication scheduled outside its preferred time window.
 - Warnings are attached to `DailyPlan.conflicts` and displayed in `summary()`.
 
+## Testing PawPal+
+
+Run the full test suite from the project root:
+
+```bash
+python -m pytest tests/test_pawpal.py -v
+```
+
+The suite contains **58 tests** across six areas:
+
+| Area | Tests | What is verified |
+|---|---|---|
+| Task validation | 3 | Rejects bad duration/priority; sensible defaults |
+| Pet & Owner management | 7 | add/remove tasks and pets; cross-pet task access |
+| Scheduling (budget & order) | 8 | Priority ordering; time budget enforcement; sequential slots |
+| Sorting | 4 | Named periods; HH:MM strings; mixed formats; single-task edge case |
+| Filtering | 6 | By status, category, priority, pet name; no-match returns `[]` |
+| Recurring tasks | 8 | `is_due_today` for daily/weekly/as-needed; `next_occurrence` uses `timedelta`; original task not mutated; `mark_complete` auto-appends next occurrence |
+| Conflict detection | 5 | Overlaps caught; same-category proximity; medication window; empty/single-task produce no false positives |
+| Edge cases | 10 | Pet with no tasks; all tasks completed; task duration equals budget exactly; owner with no pets; weekly task not due today |
+
+**Confidence level: ★★★★☆**
+
+The scheduler is well-covered for its current feature set. The main untested area is the Streamlit UI layer — `app.py` has no automated tests since UI interaction requires manual or browser-based testing.
+
 ### Suggested workflow
 
 1. Read the scenario carefully and identify requirements and edge cases.
